@@ -1,11 +1,58 @@
 import pandas as pd
-import tensorflow as tf
+
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
+
+cred = credentials.Certificate('//content/startrace-81336-firebase-adminsdk-hiz9b-a034d691c7.json')  # Update the path accordingly
+
+# Initialize the app with a None check to prevent reinitialization errors
+if not firebase_admin._apps:
+    firebase_admin.initialize_app(cred)
+
+# Initialize Firestore instance
+db = firestore.client()
+
+
+# Fetching data from Firestore and storing it in a list
+data = []
+users_ref = db.collection('users')
+users_docs = users_ref.stream()
+
+for user_doc in users_docs:
+    starcout_data_ref = users_ref.document(user_doc.id).collection('starscoutData')
+    starcout_data_docs = starcout_data_ref.stream()
+
+    for data_doc in starcout_data_docs:
+        doc_data = data_doc.to_dict()
+        if 'geolocation' in doc_data and isinstance(doc_data['geolocation'], dict):  # Ensuring 'geolocation' is a dictionary
+            latitude = doc_data['geolocation'].get('latitude')
+            longitude = doc_data['geolocation'].get('longitude')
+        else:
+            latitude, longitude = None, None  # Default values if 'geolocation' is missing or not a dict
+
+        data.append({
+            'RSI': doc_data.get('RSI'),
+            'deviceID': doc_data.get('deviceID'),  # Assuming inclusion for completeness; might not be used in modeling
+            'latitude': latitude,
+            'longitude': longitude,
+            'percentageUptime': doc_data.get('percentageUptime')
+            # 'signal_strength': doc_data.get('signal_strength')  # Assuming you have this or a similar field for labels
+        })
+
+# Creating a DataFrame from the list
+df = pd.DataFrame(data)
+
+print(df.columns)
+
+
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-# Assuming df is your DataFrame
-features = df[['RSI', 'speed', 'uptime', 'latitude', 'longitude']]
-labels = df['signal_strength']  # This column needs to exist in your dataset
+
+# Assuming 'RSI' is the label for demonstration
+features = df[['latitude', 'longitude', 'percentageUptime']]  # Adjust features as needed
+labels = df['RSI']  # Update based on your actual label
 
 # Split the dataset
 X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
@@ -14,6 +61,9 @@ X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=
 scaler = StandardScaler().fit(X_train)
 X_train_scaled = scaler.transform(X_train)
 X_test_scaled = scaler.transform(X_test)
+
+
+import tensorflow as tf
 
 # Build the model
 model = tf.keras.Sequential([
@@ -34,4 +84,4 @@ model.evaluate(X_test_scaled, y_test)
 
 # Predict and analyze
 predictions = model.predict(X_test_scaled)
-# Analyze `predictions` to find areas with strongest and weakest signals
+# Further analysis can be done on `predictions` to find areas with strongest and weakest signals
