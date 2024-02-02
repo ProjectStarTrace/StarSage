@@ -1,5 +1,5 @@
 import pandas as pd
-
+import numpy as np
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
@@ -43,11 +43,37 @@ for user_doc in users_docs:
 # Creating a DataFrame from the list
 df = pd.DataFrame(data)
 
+print("Below are the columns pulled from the StarTrace Firestore")
 print(df.columns)
+print("\n\n")
 
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+
+print("\n\nChecking for NaN Values or Infinite Values")
+# Check for NaN values
+print(df.isnull().sum())
+
+# Check for infinite values
+print((df == np.inf).sum())
+print((df == -np.inf).sum())
+print("\n\n")
+
+print("Correcting for any NaN or Infinite Values")
+# Fill NaN values with the mean of the column
+df.fillna(df.mean(), inplace=True)
+
+# Alternatively, drop rows with NaN values
+# df.dropna(inplace=True)
+
+# Replace infinite values with NaN, then fill or drop them
+df.replace([np.inf, -np.inf], np.nan, inplace=True)
+df.fillna(df.mean(), inplace=True)  # or use df.dropna(inplace=True)
+
+
+
+
 
 
 # Assuming 'RSI' is the label for demonstration
@@ -65,12 +91,13 @@ X_test_scaled = scaler.transform(X_test)
 
 import tensorflow as tf
 
-# Build the model
+initializer = tf.keras.initializers.GlorotUniform()  # Or another appropriate initializer
 model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', input_shape=(X_train_scaled.shape[1],)),
-    tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dense(1)
+    tf.keras.layers.Dense(128, activation='relu', kernel_initializer=initializer, input_shape=(X_train_scaled.shape[1],)),
+    tf.keras.layers.Dense(64, activation='relu', kernel_initializer=initializer),
+    tf.keras.layers.Dense(1, kernel_initializer=initializer)
 ])
+
 
 model.compile(optimizer='adam',
               loss='mean_squared_error',
@@ -85,3 +112,5 @@ model.evaluate(X_test_scaled, y_test)
 # Predict and analyze
 predictions = model.predict(X_test_scaled)
 # Further analysis can be done on `predictions` to find areas with strongest and weakest signals
+
+
