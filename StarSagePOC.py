@@ -1,5 +1,10 @@
+#STARSAGE
+
+
+
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.cloud.firestore import GeoPoint
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -80,23 +85,25 @@ qos_predictions = model_qos.predict(X_test_scaled).flatten()
 ANOMALY_PREDICTION_THRESHOLD = 0.5  # Define the threshold for considering something an anomaly
 QOS_THRESHOLD = 25  # Define a threshold for considering QoS too low
 
-# Assuming the predictions and the corresponding rows in X_test are in the same order
-# Iterate using enumerate to get the correct index in the prediction arrays
+# Adjusted Firestore update logic with GeoPoint for latitude and longitude
 for idx, (index, row) in enumerate(X_test.iterrows()):
     scout_id = df.at[index, 'ScoutID']
-    # Access predictions using idx to avoid IndexError
     is_anomalous = bool(anomaly_predictions[idx] > ANOMALY_PREDICTION_THRESHOLD or qos_predictions[idx] < QOS_THRESHOLD)
+    
+    # Create a GeoPoint object from latitude and longitude
+    geopoint = GeoPoint(float(df.at[index, 'Latitude']), float(df.at[index, 'Longitude']))
+    
     doc_ref = db.collection('starsage_predictions').document(scout_id)
     doc_ref.set({
         'City': df.at[index, 'OriginalCity'],
         'Country': df.at[index, 'OriginalCountry'],
         'Region': df.at[index, 'OriginalRegion'],
-        'Latitude': float(df.at[index, 'Latitude']),
-        'Longitude': float(df.at[index, 'Longitude']),
+        'GeoLocation': geopoint,  # Store the GeoPoint object
         'DownloadSpeed': float(df.at[index, 'DownloadSpeed']),
         'UploadSpeed': float(df.at[index, 'UploadSpeed']),
         'IsAnomalous': is_anomalous,
         'QoSScore': float(qos_predictions[idx]),
     })
 
-print("Firestore update with predictions and additional info complete.")
+print("Firestore update with predictions, GeoPoint, and additional info complete.")
+
