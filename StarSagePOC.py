@@ -1,116 +1,109 @@
-import pandas as pd
-import numpy as np
+#STARSAGE
+
+
+
 import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
-
-cred = credentials.Certificate('//content/startrace-81336-firebase-adminsdk-hiz9b-a034d691c7.json')  # Update the path accordingly
-
-# Initialize the app with a None check to prevent reinitialization errors
-if not firebase_admin._apps:
-    firebase_admin.initialize_app(cred)
-
-# Initialize Firestore instance
-db = firestore.client()
-
-
-# Fetching data from Firestore and storing it in a list
-data = []
-users_ref = db.collection('users')
-users_docs = users_ref.stream()
-
-for user_doc in users_docs:
-    starcout_data_ref = users_ref.document(user_doc.id).collection('starscoutData')
-    starcout_data_docs = starcout_data_ref.stream()
-
-    for data_doc in starcout_data_docs:
-        doc_data = data_doc.to_dict()
-        if 'geolocation' in doc_data and isinstance(doc_data['geolocation'], dict):  # Ensuring 'geolocation' is a dictionary
-            latitude = doc_data['geolocation'].get('latitude')
-            longitude = doc_data['geolocation'].get('longitude')
-        else:
-            latitude, longitude = None, None  # Default values if 'geolocation' is missing or not a dict
-
-        data.append({
-            'RSI': doc_data.get('RSI'),
-            'deviceID': doc_data.get('deviceID'),  # Assuming inclusion for completeness; might not be used in modeling
-            'latitude': latitude,
-            'longitude': longitude,
-            'percentageUptime': doc_data.get('percentageUptime')
-            # 'signal_strength': doc_data.get('signal_strength')  # Assuming you have this or a similar field for labels
-        })
-
-# Creating a DataFrame from the list
-df = pd.DataFrame(data)
-
-print("Below are the columns pulled from the StarTrace Firestore")
-print(df.columns)
-print("\n\n")
-
-
+from firebase_admin import credentials, firestore
+from google.cloud.firestore import GeoPoint
+import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+import numpy as np
+import pandas as pd
 
-print("\n\nChecking for NaN Values or Infinite Values")
-# Check for NaN values
-print(df.isnull().sum())
+# Initialize Firebase Admin
+cred = credentials.Certificate("startraceFirebaseJSONAuth.json")
+if not firebase_admin._apps:
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
 
-# Check for infinite values
-print((df == np.inf).sum())
-print((df == -np.inf).sum())
-print("\n\n")
+# Fetch data from Firestore
+scout_data_ref = db.collection('starscoutData_sim')
+scout_data_docs = scout_data_ref.stream()
 
-print("Correcting for any NaN or Infinite Values")
-# Fill NaN values with the mean of the column
-df.fillna(df.mean(), inplace=True)
+# Preprocess data
+data = []
+for data_doc in scout_data_docs:
+    doc_data = data_doc.to_dict()
+    geopoint = doc_data.get('geolocation', None)
+    latitude, longitude = (geopoint.latitude, geopoint.longitude) if geopoint else (None, None)
+    data.append({
+        'ScoutID': doc_data.get('ScoutID'),
+        'City': doc_data.get('City', ''),
+        'Country': doc_data.get('Country', ''),
+        'Region': doc_data.get('Region', ''),
+        'Latitude': latitude,
+        'Longitude': longitude,
+        'DownloadSpeed': doc_data.get('DownloadSpeed', 0),
+        'UploadSpeed': doc_data.get('UploadSpeed', 0),
+        'AnomalyFlag': doc_data.get('AnomalyFlag', False),
+    })
 
-# Alternatively, drop rows with NaN values
-# df.dropna(inplace=True)
+df = pd.DataFrame(data)
+if df.empty:
+    raise ValueError("No data fetched from Firestore.")
 
-# Replace infinite values with NaN, then fill or drop them
-df.replace([np.inf, -np.inf], np.nan, inplace=True)
-df.fillna(df.mean(), inplace=True)  # or use df.dropna(inplace=True)
+# Calculate a placeholder QoSScore for the demonstration; replace with actual logic
+df['QoSScore'] = (df['DownloadSpeed'] + df['UploadSpeed']) / 2
 
+# Copy original values for City, Country, and Region before any transformations
+df['OriginalCity'] = df['City']
+df['OriginalCountry'] = df['Country']
+df['OriginalRegion'] = df['Region']
 
+# Apply one-hot encoding
+df = pd.get_dummies(df, columns=['City', 'Country', 'Region'])
 
+# Prepare features and labels for modeling
+features = df.drop(['ScoutID', 'AnomalyFlag', 'QoSScore', 'OriginalCity', 'OriginalCountry', 'OriginalRegion'], axis=1)
+anomaly_labels = df['AnomalyFlag']
+qos_labels = df['QoSScore']
 
+# Split the data
+X_train, X_test, y_anomaly_train, y_anomaly_test, y_qos_train, y_qos_test = train_test_split(features, anomaly_labels, qos_labels, test_size=0.2, random_state=42)
 
-
-# Assuming 'RSI' is the label for demonstration
-features = df[['latitude', 'longitude', 'percentageUptime']]  # Adjust features as needed
-labels = df['RSI']  # Update based on your actual label
-
-# Split the dataset
-X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
-
-# Normalize features
-scaler = StandardScaler().fit(X_train)
-X_train_scaled = scaler.transform(X_train)
+# Feature scaling
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
+# Define and compile TensorFlow models for anomaly detection and QoS scoring
+model_anomaly = tf.keras.Sequential([tf.keras.layers.Dense(64, activation='relu', input_shape=(X_train_scaled.shape[1],)), tf.keras.layers.Dense(64, activation='relu'), tf.keras.layers.Dense(1, activation='sigmoid')])
+model_anomaly.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model_qos = tf.keras.Sequential([tf.keras.layers.Dense(64, activation='relu', input_shape=(X_train_scaled.shape[1],)), tf.keras.layers.Dense(64, activation='relu'), tf.keras.layers.Dense(1)])
+model_qos.compile(optimizer='adam', loss='mean_squared_error')
 
-import tensorflow as tf
+# Train the models
+model_anomaly.fit(X_train_scaled, y_anomaly_train, epochs=10, batch_size=10, validation_split=0.1)
+model_qos.fit(X_train_scaled, y_qos_train, epochs=10, batch_size=10, validation_split=0.1)
 
-initializer = tf.keras.initializers.GlorotUniform()  # Or another appropriate initializer
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', kernel_initializer=initializer, input_shape=(X_train_scaled.shape[1],)),
-    tf.keras.layers.Dense(64, activation='relu', kernel_initializer=initializer),
-    tf.keras.layers.Dense(1, kernel_initializer=initializer)
-])
+# Predict with the models
+anomaly_predictions = model_anomaly.predict(X_test_scaled).flatten()
+qos_predictions = model_qos.predict(X_test_scaled).flatten()
 
+# Example Firestore update logic with type conversion
+ANOMALY_PREDICTION_THRESHOLD = 0.5  # Define the threshold for considering something an anomaly
+QOS_THRESHOLD = 25  # Define a threshold for considering QoS too low
 
-model.compile(optimizer='adam',
-              loss='mean_squared_error',
-              metrics=['mean_absolute_error'])
+# Adjusted Firestore update logic with GeoPoint for latitude and longitude
+for idx, (index, row) in enumerate(X_test.iterrows()):
+    scout_id = df.at[index, 'ScoutID']
+    is_anomalous = bool(anomaly_predictions[idx] > ANOMALY_PREDICTION_THRESHOLD or qos_predictions[idx] < QOS_THRESHOLD)
+    
+    # Create a GeoPoint object from latitude and longitude
+    geopoint = GeoPoint(float(df.at[index, 'Latitude']), float(df.at[index, 'Longitude']))
+    
+    doc_ref = db.collection('starsage_predictions').document(scout_id)
+    doc_ref.set({
+        'City': df.at[index, 'OriginalCity'],
+        'Country': df.at[index, 'OriginalCountry'],
+        'Region': df.at[index, 'OriginalRegion'],
+        'GeoLocation': geopoint,  # Store the GeoPoint object
+        'DownloadSpeed': float(df.at[index, 'DownloadSpeed']),
+        'UploadSpeed': float(df.at[index, 'UploadSpeed']),
+        'IsAnomalous': is_anomalous,
+        'QoSScore': float(qos_predictions[idx]),
+    })
 
-# Train the model
-model.fit(X_train_scaled, y_train, epochs=10, validation_split=0.2)
-
-# Evaluate the model
-model.evaluate(X_test_scaled, y_test)
-
-# Predict and analyze
-predictions = model.predict(X_test_scaled)
-# Further analysis can be done on `predictions` to find areas with strongest and weakest signals
-
+print("Firestore update with predictions, GeoPoint, and additional info complete.")
 
