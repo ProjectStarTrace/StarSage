@@ -31,25 +31,30 @@ for data_doc in scout_data_docs:
         'Longitude': longitude,
         'DownloadSpeed': doc_data.get('DownloadSpeed', 0),
         'UploadSpeed': doc_data.get('UploadSpeed', 0),
-        # You will need a mechanism to label anomalies in your data. This is a placeholder.
-        'AnomalyFlag': doc_data.get('AnomalyFlag', False),
+        'AnomalyFlag': doc_data.get('AnomalyFlag', False),  # Assume you have a way to initially flag anomalies
     })
 
 df = pd.DataFrame(data)
 if df.empty:
     raise ValueError("No data fetched from Firestore.")
 
+# Define thresholds
+QOS_THRESHOLD = 25
+DOWNLOAD_SPEED_THRESHOLD = 10
+ANOMALY_PREDICTION_THRESHOLD = 0.5  # Adjust based on sensitivity
+
+# Adjusting anomaly labels based on QoS scores and download speeds
+# Placeholder for QoS score calculation, replace with your actual logic
+df['QoSScore'] = np.random.randint(1, 101, size=len(df))
+df['AnomalyFlag'] = np.where((df['QoSScore'] < QOS_THRESHOLD) | (df['DownloadSpeed'] < DOWNLOAD_SPEED_THRESHOLD), True, df['AnomalyFlag'])
+
 # Convert 'City', 'Country', 'Region' to one-hot encoding, include 'Latitude', 'Longitude'
 df = pd.get_dummies(df, columns=['City', 'Country', 'Region'])
 
-# Assuming you're predicting whether a record is anomalous (anomaly detection)
-# and predicting a QoS score based on features (QoS prediction)
-
 # Split the DataFrame into features and labels for both tasks
-features = df.drop(['ScoutID', 'AnomalyFlag'], axis=1)
-anomaly_labels = df['AnomalyFlag']  # For anomaly detection task
-# Placeholder QoS scores - you'll replace this with your actual logic or data
-qos_labels = np.random.randint(1, 101, size=len(df))  # For QoS prediction task
+features = df.drop(['ScoutID', 'AnomalyFlag', 'QoSScore'], axis=1)
+anomaly_labels = df['AnomalyFlag']
+qos_labels = df['QoSScore']
 
 # Split the data
 X_train, X_test, y_anomaly_train, y_anomaly_test, y_qos_train, y_qos_test = train_test_split(
@@ -88,12 +93,10 @@ model_qos.fit(X_train_scaled, y_qos_train, epochs=10, batch_size=10, validation_
 anomaly_predictions = model_anomaly.predict(X_test_scaled).flatten()
 qos_predictions = model_qos.predict(X_test_scaled).flatten()
 
-# Update Firestore with predictions (simplified for illustration)
-scout_ids_test = df.iloc[X_test.index]['ScoutID']  # Get ScoutIDs for the test set
+# Update Firestore with predictions
+scout_ids_test = df.iloc[X_test.index]['ScoutID']  # Retrieve ScoutIDs for the test set
 for scout_id, anomaly_pred, qos_pred in zip(scout_ids_test, anomaly_predictions, qos_predictions):
-    # Simplified logic for determining if a record is predicted as an anomaly
-    is_anomalous = anomaly_pred > 0.5
-    # Store results in Firestore
+    is_anomalous = anomaly_pred > ANOMALY_PREDICTION_THRESHOLD or qos_pred < QOS_THRESHOLD
     db.collection('starsage_predictions').document(scout_id).set({
         'IsAnomalous': bool(is_anomalous),
         'QoSScore': float(qos_pred)
