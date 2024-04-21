@@ -1,50 +1,71 @@
-import pandas as pd
-import numpy as np
 import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
+from firebase_admin import credentials, firestore
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+import pandas as pd
 
-# Assuming the JSON credentials file is at this location
+# Initialize Firebase Admin
 cred = credentials.Certificate("startraceFirebaseJSONAuth.json")
-
-# Initialize the app with a None check to prevent reinitialization errors
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
-
-# Initialize Firestore instance
 db = firestore.client()
 
-# Fetching data from Firestore and storing it in a list
-data = []
-# Assuming 'starscoutData_simulated' is the correct collection name
-scout_data_ref = db.collection('starscoutData_simulated')
+# Fetch data from Firestore
+scout_data_ref = db.collection('starscoutData_sim')
 scout_data_docs = scout_data_ref.stream()
 
+# Preprocess data
+data = []
 for data_doc in scout_data_docs:
     doc_data = data_doc.to_dict()
-    if 'geolocation' in doc_data and isinstance(doc_data['geolocation'], firestore.GeoPoint):
-        latitude = doc_data['geolocation'].latitude
-        longitude = doc_data['geolocation'].longitude
-    else:
-        latitude, longitude = None, None  # Default values if 'geolocation' is missing or not a GeoPoint
-
-    # Update this part to reflect the actual structure of your Firestore documents
     data.append({
-        'DeviceID': doc_data.get('DeviceID', None),  # Update based on your Firestore document structure
-        'latitude': latitude,
-        'longitude': longitude,
-        'DownloadSpeed': doc_data.get('DownloadSpeed', None),
-        'UploadSpeed': doc_data.get('UploadSpeed', None)
-        # Add more fields as needed based on your Firestore document structure
+        'ScoutID': doc_data.get('ScoutID'),
+        'DownloadSpeed': doc_data.get('DownloadSpeed', 0),
+        'UploadSpeed': doc_data.get('UploadSpeed', 0),
+        # Include additional features as necessary
     })
 
-# Creating a DataFrame from the list
+# Convert to DataFrame
 df = pd.DataFrame(data)
+if df.empty:
+    raise ValueError("No data fetched from Firestore.")
 
-print("Below are the columns pulled from the Firestore:")
-print(df.columns)
-print("\n")
+# Separate ScoutID and features for modeling
+scout_ids = df['ScoutID']
+features = df[['DownloadSpeed', 'UploadSpeed']]
+target = np.random.randint(1, 101, size=len(df))  # Placeholder target, replace with actual data or model
 
-# Proceed with your data preprocessing, training, and evaluation as you've outlined.
-# The code from here on assumes you have the required fields in your Firestore documents
-# and that you adjust the machine learning part as per your specific use case and data.
+# Split the data
+X_train, X_test, y_train, y_test, scout_ids_train, scout_ids_test = train_test_split(features, target, scout_ids, test_size=0.2, random_state=42)
+
+# Feature scaling
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Define a TensorFlow model
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(64, activation='relu', input_shape=(X_train_scaled.shape[1],)),
+    tf.keras.layers.Dense(64, activation='relu'),
+    tf.keras.layers.Dense(1, activation='sigmoid')  # Sigmoid to bound output between 0 and 1
+])
+
+# Compile the model
+model.compile(optimizer='adam', loss='mean_squared_error')
+
+# Train the model
+model.fit(X_train_scaled, y_train, epochs=10, batch_size=10, validation_split=0.1)
+
+# Predict QoS scores
+predictions = model.predict(X_test_scaled).flatten()
+qos_scores = (predictions * 99) + 1  # Scale to 1-100
+
+# Store predictions in Firestore
+for scout_id, qos_score in zip(scout_ids_test, qos_scores):
+    db.collection('starsage_predictions').document(scout_id).set({
+        'QoSScore': float(qos_score)
+    })
+
+print("Model training and Firestore update complete.")
