@@ -4,7 +4,8 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
 
-cred = credentials.Certificate('//content/startrace-81336-firebase-adminsdk-hiz9b-a034d691c7.json')  # Update the path accordingly
+# Assuming the JSON credentials file is at this location
+cred = credentials.Certificate("startraceFirebaseJSONAuth.json")
 
 # Initialize the app with a None check to prevent reinitialization errors
 if not firebase_admin._apps:
@@ -13,104 +14,37 @@ if not firebase_admin._apps:
 # Initialize Firestore instance
 db = firestore.client()
 
-
 # Fetching data from Firestore and storing it in a list
 data = []
-users_ref = db.collection('users')
-users_docs = users_ref.stream()
+# Assuming 'starscoutData_simulated' is the correct collection name
+scout_data_ref = db.collection('starscoutData_simulated')
+scout_data_docs = scout_data_ref.stream()
 
-for user_doc in users_docs:
-    starcout_data_ref = users_ref.document(user_doc.id).collection('starscoutData')
-    starcout_data_docs = starcout_data_ref.stream()
+for data_doc in scout_data_docs:
+    doc_data = data_doc.to_dict()
+    if 'geolocation' in doc_data and isinstance(doc_data['geolocation'], firestore.GeoPoint):
+        latitude = doc_data['geolocation'].latitude
+        longitude = doc_data['geolocation'].longitude
+    else:
+        latitude, longitude = None, None  # Default values if 'geolocation' is missing or not a GeoPoint
 
-    for data_doc in starcout_data_docs:
-        doc_data = data_doc.to_dict()
-        if 'geolocation' in doc_data and isinstance(doc_data['geolocation'], dict):  # Ensuring 'geolocation' is a dictionary
-            latitude = doc_data['geolocation'].get('latitude')
-            longitude = doc_data['geolocation'].get('longitude')
-        else:
-            latitude, longitude = None, None  # Default values if 'geolocation' is missing or not a dict
-
-        data.append({
-            'RSI': doc_data.get('RSI'),
-            'deviceID': doc_data.get('deviceID'),  # Assuming inclusion for completeness; might not be used in modeling
-            'latitude': latitude,
-            'longitude': longitude,
-            'percentageUptime': doc_data.get('percentageUptime')
-            # 'signal_strength': doc_data.get('signal_strength')  # Assuming you have this or a similar field for labels
-        })
+    # Update this part to reflect the actual structure of your Firestore documents
+    data.append({
+        'DeviceID': doc_data.get('DeviceID', None),  # Update based on your Firestore document structure
+        'latitude': latitude,
+        'longitude': longitude,
+        'DownloadSpeed': doc_data.get('DownloadSpeed', None),
+        'UploadSpeed': doc_data.get('UploadSpeed', None)
+        # Add more fields as needed based on your Firestore document structure
+    })
 
 # Creating a DataFrame from the list
 df = pd.DataFrame(data)
 
-print("Below are the columns pulled from the StarTrace Firestore")
+print("Below are the columns pulled from the Firestore:")
 print(df.columns)
-print("\n\n")
+print("\n")
 
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-print("\n\nChecking for NaN Values or Infinite Values")
-# Check for NaN values
-print(df.isnull().sum())
-
-# Check for infinite values
-print((df == np.inf).sum())
-print((df == -np.inf).sum())
-print("\n\n")
-
-print("Correcting for any NaN or Infinite Values")
-# Fill NaN values with the mean of the column
-df.fillna(df.mean(), inplace=True)
-
-# Alternatively, drop rows with NaN values
-# df.dropna(inplace=True)
-
-# Replace infinite values with NaN, then fill or drop them
-df.replace([np.inf, -np.inf], np.nan, inplace=True)
-df.fillna(df.mean(), inplace=True)  # or use df.dropna(inplace=True)
-
-
-
-
-
-
-# Assuming 'RSI' is the label for demonstration
-features = df[['latitude', 'longitude', 'percentageUptime']]  # Adjust features as needed
-labels = df['RSI']  # Update based on your actual label
-
-# Split the dataset
-X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
-
-# Normalize features
-scaler = StandardScaler().fit(X_train)
-X_train_scaled = scaler.transform(X_train)
-X_test_scaled = scaler.transform(X_test)
-
-
-import tensorflow as tf
-
-initializer = tf.keras.initializers.GlorotUniform()  # Or another appropriate initializer
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', kernel_initializer=initializer, input_shape=(X_train_scaled.shape[1],)),
-    tf.keras.layers.Dense(64, activation='relu', kernel_initializer=initializer),
-    tf.keras.layers.Dense(1, kernel_initializer=initializer)
-])
-
-
-model.compile(optimizer='adam',
-              loss='mean_squared_error',
-              metrics=['mean_absolute_error'])
-
-# Train the model
-model.fit(X_train_scaled, y_train, epochs=10, validation_split=0.2)
-
-# Evaluate the model
-model.evaluate(X_test_scaled, y_test)
-
-# Predict and analyze
-predictions = model.predict(X_test_scaled)
-# Further analysis can be done on `predictions` to find areas with strongest and weakest signals
-
-
+# Proceed with your data preprocessing, training, and evaluation as you've outlined.
+# The code from here on assumes you have the required fields in your Firestore documents
+# and that you adjust the machine learning part as per your specific use case and data.
